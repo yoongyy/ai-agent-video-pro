@@ -1,0 +1,23 @@
+{
+    "Bahasa Melayu": {
+        "Osman (Male - Standard)": "ms-MY-OsmanNeural",
+        "Ardi (Male - Deep)": "id-ID-ArdiNeural",
+        "Yasmin (Female - Standard)": "ms-MY-YasminNeural",
+        "Gadis (Female - Soft)": "id-ID-GadisNeural"
+    },
+    "English": {
+        "Christopher (Male - Deep/Docu)": "en-US-ChristopherNeural",
+        "Eric (Male - Friendly/Casual)": "en-US-EricNeural",
+        "Guy (Male - News/Professional)": "en-US-GuyNeural",
+        "Roger (Male - Serious)": "en-US-RogerNeural",
+        "Michelle (Female - Soft)": "en-US-MichelleNeural",
+        "Aria (Female - Energetic)": "en-US-AriaNeural",
+        "Jenny (Female - Assistant)": "en-US-JennyNeural"
+    },
+    "Chinese (Mandarin)": {
+        "Yunxi (Male - Energetic)": "zh-CN-YunxiNeural",
+        "Yunjian (Male - Sport/Calm)": "zh-CN-YunjianNeural",
+        "Xiaoxiao (Female - Warm/Vlog)": "zh-CN-XiaoxiaoNeural",
+        "Xiaoyi (Female - Clear)": "zh-CN-XiaoyiNeural"
+    }
+}

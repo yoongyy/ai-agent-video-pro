@@ -1,0 +1,10 @@
+streamlit
+google-generativeai
+opencv-python-headless
+requests
+moviepy>=2.0.0
+python-dotenv
+edge-tts
+gTTS
+Pillow
+numpy
