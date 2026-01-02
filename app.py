@@ -115,7 +115,7 @@ else:
     default_text = "A beautiful sunset view at Kundasang, Sabah."
     context_label = "Context / Description"
 
-prop_context = st.text_area(context_label, value=default_text, height=80)
+prop_context = st.text_area(context_label, value=default_text, height=200)
 contact_info = st.text_input("Contact Info (End Screen)", value="Contact Nica 013-452 9116")
 
 # --- 5. VISUALS MANAGER ---
