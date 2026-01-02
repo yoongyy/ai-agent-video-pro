@@ -40,6 +40,29 @@ if not GEMINI_API_KEY:
     st.error("❌ GEMINI_KEY missing in .env file!")
     st.stop()
 
+# Quick primer for new users
+with st.container(border=True):
+    st.markdown(
+        """
+        **Build short promo videos in minutes.** Pick a business mode, drop in visuals, and the app writes the script, voices it, and stitches the final MP4 for you.
+        """
+    )
+    how_cols = st.columns(3)
+    how_cols[0].markdown("1) Choose format + key facts")
+    how_cols[1].markdown("2) Upload photos in order")
+    how_cols[2].markdown("3) Generate → Download video")
+    with st.expander("How it works"):
+        st.markdown(
+            """
+            - **Business Type** tunes the copy style and language defaults for property, auto, retail, or general reels.
+            - **Video Format + Resolution** sets the canvas and motion presets (zoom/slide).
+            - **Details** feed the intro/outro hooks and captions. Keep them specific: price, location, USP, CTA.
+            - **Visuals Manager** drag-order = scene order. Use clear, watermark-free images for best AI descriptions.
+            - **Voice Settings** pick a TTS engine; Edge is natural, Google is reliable fallback.
+            - Hit **Generate Video**; we’ll caption each frame, voice it, and render the MP4 into `output/`.
+            """
+        )
+
 # --- 2. LOAD VOICES FROM JSON ---
 def load_voice_config():
     try:
