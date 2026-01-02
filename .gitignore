@@ -1,0 +1,30 @@
+# OS
+.DS_Store
+
+# Python cache and virtual envs
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.venv/
+.venv*/
+
+# Environment variables
+.env
+.env.*
+
+# Build artifacts
+*.egg-info/
+*.egg/
+*.so
+
+# Editor settings
+.idea/
+.vscode/
+
+# Generated media/output
+output/*
+!output/.gitkeep
+
+app_11_labs.py
+voices_11_labs.json
