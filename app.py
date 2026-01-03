@@ -14,6 +14,7 @@ import json
 import time
 import textwrap
 import uuid
+import random
 from gtts import gTTS
 from dotenv import load_dotenv
 from moviepy import (
@@ -22,6 +23,9 @@ from moviepy import (
     AudioFileClip,
     CompositeVideoClip,
     ColorClip,
+    TextClip,
+    VideoFileClip,
+    afx
 )
 from moviepy.video.fx import Resize
 
@@ -33,6 +37,10 @@ GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 WORD_LIMIT = os.getenv("MAX_WORDS_PER_IMAGE", "40") 
 MAX_UPLOAD_LIMIT = int(os.getenv("MAX_UPLOAD_PHOTO", "10"))
 
+# NEW: File Size Limits (Default to 50MB and 10MB if not set)
+MAX_IMG_MB = int(os.getenv("MAX_UPLOAD_IMAGE_SIZE", "50"))
+MAX_AUDIO_MB = int(os.getenv("MAX_UPLOAD_AUDIO_SIZE", "10"))
+
 st.set_page_config(page_title="AI Video Agent Pro", layout="centered")
 st.title("🇲🇾 AI Video Agent Pro")
 
@@ -40,36 +48,28 @@ if not GEMINI_API_KEY:
     st.error("❌ GEMINI_KEY missing in .env file!")
     st.stop()
 
-# Quick primer for new users
-with st.container(border=True):
-    st.markdown(
-        """
-        **Build short promo videos in minutes.** Pick a business mode, drop in visuals, and the app writes the script, voices it, and stitches the final MP4 for you.
-        """
-    )
-    how_cols = st.columns(3)
-    how_cols[0].markdown("1) Choose format + key facts")
-    how_cols[1].markdown("2) Upload photos in order")
-    how_cols[2].markdown("3) Generate → Download video")
-    with st.expander("How it works"):
-        st.markdown(
-            """
-            - **Business Type** tunes the copy style and language defaults for property, auto, retail, or general reels.
-            - **Video Format + Resolution** sets the canvas and motion presets (zoom/slide).
-            - **Details** feed the intro/outro hooks and captions. Keep them specific: price, location, USP, CTA.
-            - **Visuals Manager** drag-order = scene order. Use clear, watermark-free images for best AI descriptions.
-            - **Voice Settings** pick a TTS engine; Edge is natural, Google is reliable fallback.
-            - Hit **Generate Video**; we’ll caption each frame, voice it, and render the MP4 into `output/`.
-            """
-        )
-
-# --- 2. LOAD VOICES FROM JSON ---
+# --- 2. LOAD VOICES (FAIL-SAFE MODE) ---
 def load_voice_config():
     try:
         with open("voices.json", "r") as f:
-            return json.load(f)
-    except FileNotFoundError:
-        return {}
+            data = json.load(f)
+            if data: return data
+    except (FileNotFoundError, json.JSONDecodeError):
+        pass
+    return {
+        "English": {
+            "Male (Christopher)": "en-US-ChristopherNeural",
+            "Female (Aria)": "en-US-AriaNeural",
+        },
+        "Bahasa Melayu": {
+            "Male (Osman)": "ms-MY-OsmanNeural",
+            "Female (Yasmin)": "ms-MY-YasminNeural"
+        },
+        "Chinese (Mandarin)": {
+            "Male (Yunxi)": "zh-CN-YunxiNeural",
+            "Female (Xiaoxiao)": "zh-CN-XiaoxiaoNeural"
+        }
+    }
 
 VOICE_DATA = load_voice_config()
 
@@ -105,446 +105,358 @@ with col_b:
         index=1
     )
 
-if "9:16" in video_format:
-    ASPECT_NAME = "Portrait"
-    resolution_options = {
-        "Compact (540x960)": (540, 960),
-        "Standard (720x1280)": (720, 1280),
-        "HD (1080x1920)": (1080, 1920)
-    }
-    default_res_idx = 1 
-else:
-    ASPECT_NAME = "Landscape"
-    resolution_options = {
-        "Standard (1280x720)": (1280, 720),
-        "HD (1920x1080)": (1920, 1080)
-    }
-    default_res_idx = 0
-
-selected_resolution = st.selectbox("Resolution", list(resolution_options.keys()), index=default_res_idx)
-TARGET_W, TARGET_H = resolution_options[selected_resolution]
-
-st.subheader("1. Details")
-if "Property" in agent_mode:
-    default_text = "RM 1,900/month, Seasons Garden Wangsa Maju, 3 Bedrooms."
-    context_label = "Property Key Facts"
-elif "Car" in agent_mode:
-    default_text = "RM 135k, 2021 BMW 530e M-Sport, Low Mileage."
-    context_label = "Car Key Facts"
-elif "Retail" in agent_mode:
-    default_text = "New Arrival: Premium Leather Handbag. RM 250. Limited Stock."
-    context_label = "Product Details"
-else:
-    default_text = "A beautiful sunset view at Kundasang, Sabah."
-    context_label = "Context / Description"
-
-prop_context = st.text_area(context_label, value=default_text, height=200)
-contact_info = st.text_input("Contact Info (End Screen)", value="Contact Nica 013-452 9116")
-
-# --- 5. VISUALS MANAGER ---
-st.subheader(f"2. Visuals Manager (Max {MAX_UPLOAD_LIMIT})")
-
-current_count = len(st.session_state.image_playlist)
-remaining_slots = MAX_UPLOAD_LIMIT - current_count
-
-if remaining_slots > 0:
-    uploaded_files = st.file_uploader(
-        f"Add Images (Can add {remaining_slots} more)", 
-        accept_multiple_files=True, 
-        type=['jpg', 'jpeg', 'png'], 
-        key=f"uploader_{st.session_state.uploader_key}" 
-    )
-
-    if uploaded_files:
-        files_to_add = uploaded_files[:remaining_slots]
-        for uploaded_file in files_to_add:
-            if not any(img.name == uploaded_file.name for img in st.session_state.image_playlist):
-                st.session_state.image_playlist.append(uploaded_file)
-        
-        if len(uploaded_files) > remaining_slots:
-            st.toast(f"⚠️ Limit reached! Only added {remaining_slots} images.", icon="🛑")
-        
-        st.session_state.uploader_key += 1
-        st.rerun()
-else:
-    st.warning(f"🚫 Maximum limit of {MAX_UPLOAD_LIMIT} images reached. Delete some to add more.")
-
-if st.session_state.image_playlist:
-    st.caption(f"Total Images: {len(st.session_state.image_playlist)}/{MAX_UPLOAD_LIMIT}")
-    
-    for i, img_file in enumerate(st.session_state.image_playlist):
-        with st.container():
-            c1, c2, c3, c4, c5 = st.columns([1, 4, 1, 1, 1])
-            with c1: st.image(img_file, width=80)
-            with c2:
-                st.text(f"Scene {i+1}")
-                st.caption(img_file.name[:20] + "..." if len(img_file.name)>20 else img_file.name)
-            with c3:
-                if i > 0:
-                    if st.button("⬆️", key=f"up_{i}"): move_image(i, "up"); st.rerun()
-            with c4:
-                if i < len(st.session_state.image_playlist) - 1:
-                    if st.button("⬇️", key=f"down_{i}"): move_image(i, "down"); st.rerun()
-            with c5:
-                if st.button("❌", key=f"del_{i}", type="primary"): remove_image(i); st.rerun()
-            st.divider()
-else:
-    st.info("👆 Upload images to start.")
-
-st.subheader("3. Voice Settings")
-
-tts_engine = st.selectbox(
-    "TTS Engine",
-    ("Edge-TTS (Natural)", "Google TTS (Standard)"),
-    help="Edge-TTS is higher quality but may be unstable. Google TTS is a reliable backup."
+# --- VIDEO MODE SELECTOR ---
+st.divider()
+st.subheader("1. Choose Video Mode")
+video_template = st.radio(
+    "Select your video style:",
+    ["Professional Walkthrough (Voiceover + Smooth)", "Viral Hype Edit (Music + Dynamic)"],
+    index=0,
+    horizontal=True
 )
 
-col1, col2 = st.columns(2)
-with col1:
-    if VOICE_DATA:
-        selected_language = st.selectbox("Language", list(VOICE_DATA.keys()))
-    else:
-        selected_language = "English" 
-        
-with col2:
-    if VOICE_DATA and selected_language in VOICE_DATA:
-        available_personas = list(VOICE_DATA[selected_language].keys())
-        selected_persona_name = st.selectbox("Voice Persona", available_personas)
-        SELECTED_VOICE = VOICE_DATA[selected_language][selected_persona_name]
-    else:
-        SELECTED_VOICE = "en-US-ChristopherNeural"
+is_pro_mode = "Professional" in video_template
 
-# --- 6. BACKEND FUNCTIONS ---
+# --- AUDIO SETTINGS (CONDITIONAL) ---
+st.subheader("2. Audio Settings")
+
+if is_pro_mode:
+    # PRO MODE: SHOW TTS SETTINGS
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        tts_engine = st.selectbox("TTS Engine", ("Edge-TTS (Natural)", "Google TTS (Standard)"))
+    with c2:
+        selected_language = st.selectbox("Language", list(VOICE_DATA.keys()))
+    with c3:
+        if selected_language in VOICE_DATA:
+            available_personas = list(VOICE_DATA[selected_language].keys())
+            selected_persona_name = st.selectbox("Voice Persona", available_personas)
+            SELECTED_VOICE = VOICE_DATA[selected_language][selected_persona_name]
+        else:
+            SELECTED_VOICE = "en-US-ChristopherNeural"
+    
+    st.info("ℹ️ Pro Mode: Audio duration determines slide length.")
+
+else:
+    # VIRAL MODE: SHOW MUSIC SETTINGS
+    music_option = st.radio(
+        "Background Music Source",
+        ["Use Default Track", "Upload MP3/WAV"],
+        index=0,
+        horizontal=True
+    )
+    
+    uploaded_music = None
+    default_music_path = "assets/music/upbeat.mp3" 
+    
+    if "Upload" in music_option:
+        uploaded_music = st.file_uploader(
+            f"Upload Background Music (Max {MAX_AUDIO_MB}MB)", 
+            type=["mp3", "wav"]
+        )
+        # --- AUDIO SIZE CHECK ---
+        if uploaded_music:
+            if uploaded_music.size > MAX_AUDIO_MB * 1024 * 1024:
+                st.error(f"❌ Audio file too big! Limit is {MAX_AUDIO_MB}MB.")
+                uploaded_music = None # Reject
+            else:
+                st.success(f"✅ {uploaded_music.name} ready!")
+
+    else:
+        if not os.path.exists("assets/music"):
+            os.makedirs("assets/music", exist_ok=True)
+        
+        music_files = [f for f in os.listdir("assets/music") if f.endswith('mp3')]
+        if music_files:
+            selected_track = st.selectbox("Select Track", music_files)
+            uploaded_music = os.path.join("assets/music", selected_track)
+        else:
+            st.warning("⚠️ No default music found in 'assets/music'. Please upload a file.")
+
+    st.info("ℹ️ Viral Mode: Slides are fast (2.5s) and synced to visual effects.")
+
+
+if is_pro_mode:
+    if "Property" in agent_mode:
+        default_text = "RM 1,900/month, Seasons Garden Wangsa Maju, 3 Bedrooms."
+        context_label = "Property Key Facts"
+    else:
+        default_text = "RM 135k, 2021 BMW 530e M-Sport, Low Mileage."
+        context_label = "Car Key Facts"
+    
+    st.divider()
+    prop_context = st.text_area(context_label, value=default_text, height=220)
+else:
+    prop_context = "Viral Edit" 
+
+contact_info = st.text_input("Contact Info (End Screen)", value="Contact Kenny 012-3456789")
+
+# --- 5. VISUALS MANAGER ---
+st.divider()
+st.subheader(f"3. Visuals Manager (Max {MAX_UPLOAD_LIMIT})")
+
+if "9:16" in video_format:
+    resolution_options = {"Standard (720x1280)": (720, 1280), "HD (1080x1920)": (1080, 1920)}
+    default_res_idx = 0
+else:
+    resolution_options = {"Standard (1280x720)": (1280, 720), "HD (1920x1080)": (1920, 1080)}
+    default_res_idx = 0
+
+TARGET_W, TARGET_H = list(resolution_options.values())[0] # Default to first
+
+uploaded_files = st.file_uploader(
+    f"Add Images (Max {MAX_IMG_MB}MB each)", 
+    accept_multiple_files=True, 
+    type=['jpg', 'jpeg', 'png'], 
+    key=f"uploader_{st.session_state.uploader_key}"
+)
+
+if uploaded_files:
+    # --- IMAGE SIZE CHECK ---
+    valid_files = []
+    for f in uploaded_files:
+        if f.size > MAX_IMG_MB * 1024 * 1024:
+            st.toast(f"❌ Skipped {f.name} (Too big! Max {MAX_IMG_MB}MB)", icon="⚠️")
+        else:
+            valid_files.append(f)
+
+    remaining_slots = MAX_UPLOAD_LIMIT - len(st.session_state.image_playlist)
+    files_to_add = valid_files[:remaining_slots]
+    
+    added_count = 0
+    for uploaded_file in files_to_add:
+        if not any(img.name == uploaded_file.name for img in st.session_state.image_playlist):
+            st.session_state.image_playlist.append(uploaded_file)
+            added_count += 1
+            
+    if added_count > 0:
+        st.session_state.uploader_key += 1
+        st.rerun()
+
+if st.session_state.image_playlist:
+    st.caption(f"Total Images: {len(st.session_state.image_playlist)}")
+    cols = st.columns(5)
+    for i, img in enumerate(st.session_state.image_playlist):
+        with cols[i % 5]:
+            st.image(img, use_container_width=True)
+            if st.button("❌", key=f"del_{i}"): remove_image(i); st.rerun()
+
+# --- BACKEND FUNCTIONS ---
 
 def remove_watermark(image_path):
+    # FIXED: Replaced white box with Inpainting
     img = cv2.imread(image_path)
     if img is None: return image_path
     h, w = img.shape[:2]
-    top_y, bottom_y = h - 60, h
-    left_x, right_x = w - 200, w
-    mask = np.zeros((h, w), dtype=np.uint8)
-    cv2.rectangle(mask, (left_x, top_y), (right_x, bottom_y), (255), -1)
+    
+    # 1. Create a mask for the bottom right area
+    mask = np.zeros(img.shape[:2], dtype=np.uint8)
+    top_y = h - 50
+    left_x = w - 150
+    cv2.rectangle(mask, (left_x, top_y), (w, h), (255), -1)
+
+    # 2. Heal the image using surrounding pixels
     clean_img = cv2.inpaint(img, mask, 3, cv2.INPAINT_TELEA)
+    
     cv2.imwrite(image_path, clean_img)
     return image_path
 
-def clean_text(text):
-    text = re.sub(r'^(Script|Voiceover|Line 1|Audio):', '', text, flags=re.IGNORECASE).strip()
-    return text
-
-def apply_zoom_in(clip, duration):
-    return (
-        clip.with_effects([Resize(lambda t: 1 + 0.04 * t)])
-        .with_position(("center", "center"))
-        .with_duration(duration)
-    )
-
-def apply_zoom_out(clip, duration):
-    return (
-        clip.with_effects([Resize(lambda t: 1.15 - 0.04 * t)])
-        .with_position(("center", "center"))
-        .with_duration(duration)
-    )
-
-def apply_slide(clip, duration, direction):
-    if TARGET_W > TARGET_H: 
-        clip = clip.resized(width=int(TARGET_W * 1.2))
-        if clip.h < TARGET_H: clip = clip.resized(height=TARGET_H)
-    else: 
-        clip = clip.resized(height=int(TARGET_H * 1.2))
-        if clip.w < TARGET_W: clip = clip.resized(width=TARGET_W)
-
-    move_dist = 50
-    if direction == 'left': pos = lambda t: (int(0 - move_dist * t), 'center')
-    elif direction == 'right': 
-        start_x = -(clip.w - TARGET_W) 
-        pos = lambda t: (int(start_x + move_dist * t), 'center')
-    elif direction == 'up': pos = lambda t: ('center', int(0 - move_dist * t))
-    elif direction == 'down': 
-        start_y = -(clip.h - TARGET_H)
-        pos = lambda t: ('center', int(start_y + move_dist * t))
-        
-    return clip.with_duration(duration).with_position(pos)
-
-# --- 7. NEW TEXT GENERATOR (UNIVERSAL & BEST FIT) ---
-
-def get_valid_font_path():
-    candidates = [
-        "arial.ttf", "Arial.ttf",
-        "/Library/Fonts/Arial.ttf", 
-        "/System/Library/Fonts/Supplemental/Arial.ttf", 
-        "C:/Windows/Fonts/arial.ttf", 
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 
-        "sf-pro-display-regular.otf"
-    ]
-    for path in candidates:
-        try:
-            PIL.ImageFont.truetype(path, 20)
-            return path
-        except OSError:
-            continue
-    return None
-
-def create_text_image(text, width, height, is_label=False):
-    if is_label:
-        label_h = int(height * 0.15)
-        img = PIL.Image.new('RGBA', (width, label_h), (0, 0, 0, 0))
-        draw = PIL.ImageDraw.Draw(img)
-        fontsize = int(height * 0.06)
-        text_color = (255, 255, 255, 255)
-        stroke_color = (0, 0, 0, 255)
-        max_width_pct = 0.95 
-    else:
-        img = PIL.Image.new('RGB', (width, height), color=(0, 0, 0))
-        draw = PIL.ImageDraw.Draw(img)
-        fontsize = int(height * 0.25)
-        text_color = (255, 255, 255)
-        stroke_color = None
-        max_width_pct = 0.90 
-
-    font_path = get_valid_font_path()
-
-    max_safe_width = int(width * max_width_pct)
-    min_fontsize = 20
-    wrap_chars = 30 if not is_label else 50
+def apply_professional_effects(clip, duration, index):
+    from moviepy.video.fx import Resize as MPResize
     
-    while fontsize > min_fontsize:
-        if font_path:
-            font = PIL.ImageFont.truetype(font_path, fontsize)
+    effects = ['zoom_in', 'zoom_out', 'slide_left', 'slide_right']
+    effect = effects[index % len(effects)]
+    
+    if effect == 'zoom_in':
+        return clip.with_effects([MPResize(lambda t: 1 + 0.04 * t)]).with_position("center").with_duration(duration)
+    elif effect == 'zoom_out':
+        return clip.with_effects([MPResize(lambda t: 1.15 - 0.04 * t)]).with_position("center").with_duration(duration)
+    elif 'slide' in effect:
+        clip = clip.resized(width=int(TARGET_W*1.2))
+        move_x = 50 if effect == 'slide_left' else -50
+        return clip.with_position(lambda t: (int(move_x * t), 'center')).with_duration(duration)
+    
+    return clip.with_duration(duration)
+
+def apply_viral_effects(clip, duration):
+    W, H = clip.size
+    effect_type = random.choice(['kick', 'zoom_fast', 'slide_fast'])
+    
+    def make_frame(get_frame, t):
+        frame = get_frame(t)
+        
+        if effect_type == 'kick':
+            progress = 1.0 - (t / 0.3) if t < 0.3 else 0
+            zoom = 1.0 + (0.1 * progress)
+        elif effect_type == 'zoom_fast':
+            zoom = 1.0 + (0.2 * t / duration)
         else:
-            font = PIL.ImageFont.load_default()
-            break 
+            zoom = 1.1 
+            
+        new_w = int(W / zoom)
+        new_h = int(H / zoom)
+        center_x, center_y = W // 2, H // 2
+        
+        x1 = max(0, min(center_x - new_w // 2, W - new_w))
+        y1 = max(0, min(center_y - new_h // 2, H - new_h))
+        
+        cropped = frame[y1:y1+new_h, x1:x1+new_w]
+        return cv2.resize(cropped, (W, H), interpolation=cv2.INTER_LINEAR)
 
-        wrapper = textwrap.TextWrapper(width=wrap_chars)
-        lines = wrapper.wrap(text)
-        
-        max_line_w = 0
-        for line in lines:
-            bbox = draw.textbbox((0, 0), line, font=font)
-            line_w = bbox[2] - bbox[0]
-            if line_w > max_line_w: max_line_w = line_w
-        
-        if max_line_w <= max_safe_width:
-            break 
-        
-        fontsize -= 2 
+    final_clip = clip.transform(make_frame).with_duration(duration)
+    
+    return final_clip
 
-    wrapper = textwrap.TextWrapper(width=wrap_chars)
-    lines = wrapper.wrap(text)
+def create_end_card(text, size, duration=3):
+    w, h = size
+    bg_clip = ColorClip(size=(w, h), color=(0, 0, 0), duration=duration)
+    font_size = 80 if w > h else 70
     
-    line_heights = [draw.textbbox((0, 0), line, font=font)[3] for line in lines]
-    total_text_height = sum(line_heights) + (len(lines) * 15)
+    # Simple PIL Text Card (Most reliable)
+    img = PIL.Image.new("RGB", (w, h), color=(0, 0, 0))
+    draw = PIL.ImageDraw.Draw(img)
+    # Try a few bundled fonts before falling back to the tiny default
+    font = None
+    for font_name in ["Arial-Bold.ttf", "Arial.ttf", "DejaVuSans-Bold.ttf", "DejaVuSans.ttf"]:
+        try:
+            font = PIL.ImageFont.truetype(font_name, font_size)
+            break
+        except Exception:
+            continue
+    if font is None:
+        font = PIL.ImageFont.load_default()
+        
+    lines = textwrap.wrap(text, width=30)
     
-    current_y = (img.height - total_text_height) // 2
+    # Calculate total text height to center it vertically
+    total_height = 0
+    line_spacing = 10
+    
+    # Get font height
+    bbox = draw.textbbox((0, 0), "Tg", font=font)
+    line_h = bbox[3] - bbox[1]
+    total_height = (line_h + line_spacing) * len(lines)
+    
+    y = (h - total_height) // 2
     
     for line in lines:
-        bbox = draw.textbbox((0, 0), line, font=font)
-        text_width = bbox[2] - bbox[0]
-        text_x = (width - text_width) // 2
+        lb = draw.textbbox((0, 0), line, font=font)
+        lw = lb[2] - lb[0]
+        x = (w - lw) // 2
+        draw.text((x, y), line, font=font, fill="white")
+        y += line_h + line_spacing
         
-        if stroke_color:
-            for offset in [(-2, -2), (2, -2), (-2, 2), (2, 2)]:
-                draw.text((text_x + offset[0], current_y + offset[1]), line, font=font, fill=stroke_color)
+    return ImageClip(np.array(img)).with_duration(duration)
 
-        draw.text((text_x, current_y), line, font=font, fill=text_color)
-        current_y += line_heights[0] + 15
-        
-    return np.array(img)
-
-def create_end_card(text):
-    duration = 3
-    img_array = create_text_image(text, TARGET_W, TARGET_H, is_label=False)
-    clip = ImageClip(img_array).with_duration(duration)
-    return clip
-
-# --- UPDATED PROMPT ---
-def analyze_image_with_context(image_path, context_text, role, language, mode):
+# --- TEXT & AI GENERATION ---
+def analyze_image_with_context(image_path, context_text, role, language):
+    if not is_pro_mode: return "", "" 
+    
     genai.configure(api_key=GEMINI_API_KEY)
     model = genai.GenerativeModel(GEMINI_MODEL)
     try: img = PIL.Image.open(image_path)
-    except: return "Error opening image", "Error"
+    except: return "Error", "View"
     
-    if language == "Bahasa Melayu": 
-        lang_instr = (
-            "Write in professional, natural Bahasa Melayu (Standard/Baku) suitable for a sales video. "
-            "STRICT RULES: \n"
-            "1. NO SLANG: Do NOT use words like 'Wah', 'Nah', 'Fuh', 'Amacam', 'Giler'. \n"
-            "2. NO FILLERS: Do not start sentences with 'Haa', 'Okay guys'. \n"
-            "3. PROFESSIONAL TONE: Speak like a high-end property agent or car showroom consultant. \n"
-            "4. NUMBERS: Write 'RM 1,900' as 'Seribu Sembilan Ratus Ringgit'. Write '530e' as 'Lima Tiga Kosong E'."
-        )
-    elif language == "Chinese (Mandarin)":
-        lang_instr = "Write in natural Simplified Chinese (Mandarin). STRICTLY NO ENGLISH."
-    else: 
-        lang_instr = "Write in professional English. Avoid starting every sentence with 'Check this out' or 'Look at this'."
-        
-    limit_instr = f"Keep it under {WORD_LIMIT} words."
+    prompt = f"Write a 1 sentence professional real estate/sales script for this image. Context: {context_text}. Language: {language}. Output: RAW TEXT ONLY."
     
-    if "Car" in mode: persona = "Professional car sales executive."
-    elif "Retail" in mode: persona = "Professional product presenter."
-    elif "General" in mode: persona = "Documentary narrator."
-    else: persona = "Professional property consultant."
-
-    if role == "intro": task = f"Intro. Hook: {context_text}. {limit_instr}"
-    elif role == "outro": task = f"Outro. CTA: {context_text}. {limit_instr}"
-    else: task = f"Describe visual. {limit_instr}"
-
-    prompt = f"""
-    {persona} {lang_instr} Task: {task}
-    Output RAW TEXT ONLY. No prefixes.
-    Line 1: Spoken text
-    Line 2: Label (2-4 words)
-    """
     try:
-        result = model.generate_content([prompt, img])
-        lines = result.text.strip().split('\n')
-        voice = clean_text(lines[0].strip())
-        label = lines[1].strip() if len(lines) > 1 else "View"
-        return voice, label
-    except: return "Check this out.", "View"
+        res = model.generate_content([prompt, img])
+        return res.text.strip(), "Feature"
+    except:
+        return "Beautiful view of the property.", "View"
 
-async def generate_audio_edge(text, voice, retries=3):
-    for attempt in range(retries):
-        try:
-            communicate = edge_tts.Communicate(text, voice)
-            temp_audio = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3")
-            await communicate.save(temp_audio.name)
-            return temp_audio.name
-        except Exception as e:
-            if attempt < retries - 1:
-                wait_time = 2 * (attempt + 1)
-                await asyncio.sleep(wait_time)
-            else:
-                raise e
-
-def generate_audio_google(text, lang_name):
-    lang_code = "ms" if lang_name == "Bahasa Melayu" else "zh-CN" if lang_name == "Chinese (Mandarin)" else "en"
-    tts = gTTS(text=text, lang=lang_code)
-    temp_audio = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3")
-    tts.save(temp_audio.name)
-    return temp_audio.name
-
-def get_audio_file(text, voice_id, lang_name, tts_engine="Edge-TTS (Natural)"):
-    if "Edge-TTS" in tts_engine:
-        try:
-            return asyncio.run(generate_audio_edge(text, voice_id))
-        except Exception as e:
-            st.toast(f"⚠️ Edge-TTS failed. Falling back to Google TTS.", icon="⚠️")
-            return generate_audio_google(text, lang_name)
-    else:
-        return generate_audio_google(text, lang_name)
-
-def create_scene(image_file, voiceover, label, voice_id, index, language, tts_engine):
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as t_img:
-        t_img.write(image_file.getvalue())
-        img_path = t_img.name
-        
-    img_path = remove_watermark(img_path)
-    audio_path = get_audio_file(voiceover, voice_id, language, tts_engine)
-    
-    if not audio_path: 
-        st.error(f"❌ Audio failed for Scene {index+1}. Skipping.")
-        return None
-        
-    audio_clip = AudioFileClip(audio_path)
-    duration = audio_clip.duration + 0.5
-    
-    base_clip = ImageClip(img_path)
-    if TARGET_W > TARGET_H:
-        base_clip = base_clip.resized(width=TARGET_W)
-        if base_clip.h < TARGET_H: base_clip = base_clip.resized(height=TARGET_H)
-    else:
-        base_clip = base_clip.resized(height=TARGET_H)
-        if base_clip.w < TARGET_W: base_clip = base_clip.resized(width=TARGET_W)
-    
-    effect_types = ['zoom_in', 'slide_left', 'zoom_out', 'slide_right', 'slide_up', 'slide_down']
-    chosen_effect = effect_types[index % len(effect_types)]
-    
-    if 'zoom' in chosen_effect:
-        if chosen_effect == 'zoom_in': video_clip = apply_zoom_in(base_clip, duration)
-        else: video_clip = apply_zoom_out(base_clip, duration)
-    else:
-        video_clip = apply_slide(base_clip, duration, chosen_effect.split('_')[1])
-        
-    video_clip = video_clip.with_audio(audio_clip)
-    
-    if language == "Chinese (Mandarin)":
-        final_scene = CompositeVideoClip([video_clip], size=(TARGET_W, TARGET_H))
-    else:
-        # Use simpler PIL label (optional) or MoviePy textclip
-        font_s = 60 if TARGET_W > TARGET_H else 50
-        try:
-            # Use strict PIL generation for labels too if needed
-            label_img = create_text_image(label, TARGET_W, TARGET_H, is_label=True)
-            txt_clip = ImageClip(label_img).with_position(("center", 0.85), relative=True).with_duration(duration)
-            final_scene = CompositeVideoClip([video_clip, txt_clip], size=(TARGET_W, TARGET_H))
-        except:
-            final_scene = CompositeVideoClip([video_clip], size=(TARGET_W, TARGET_H))
-
-    return final_scene
-
-# --- 8. EXECUTION ---
+# --- MAIN GENERATION ---
 if st.button("🚀 Generate Video"):
     if not st.session_state.image_playlist:
-        st.warning("Please add at least one image to the Visuals Manager.")
+        st.warning("Add images first.")
     else:
-        st.toast(f"⚙️ {ASPECT_NAME} | {SELECTED_VOICE}")
         scenes = []
         status = st.empty()
         bar = st.progress(0)
         
+        output_folder = "output"
+        os.makedirs(output_folder, exist_ok=True)
+        
         final_files = st.session_state.image_playlist
-        total_files = len(final_files)
+        total = len(final_files)
+        
+        # --- VIRAL MODE PREP ---
+        bg_music_clip = None
+        if not is_pro_mode:
+            if isinstance(uploaded_music, str): 
+                music_source = uploaded_music
+            elif uploaded_music is not None:
+                with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as tmp_mus:
+                    tmp_mus.write(uploaded_music.getvalue())
+                    music_source = tmp_mus.name
+            else:
+                st.error("Please upload music for Viral Mode.")
+                st.stop()
+                
+            try:
+                bg_music_clip = AudioFileClip(music_source)
+            except:
+                st.error("Invalid music file.")
+                st.stop()
 
         for i, img_file in enumerate(final_files):
-            status.write(f"🔄 Processing Scene {i+1}...")
+            status.write(f"Processing scene {i+1}...")
+            
             with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp:
                 tmp.write(img_file.getvalue())
-                tmp_path = tmp.name
+                img_path = tmp.name
+            
+            # img_path = remove_watermark(img_path)
+            
+            base_clip = ImageClip(img_path)
+            if TARGET_W > TARGET_H:
+                base_clip = base_clip.resized(width=TARGET_W)
+            else:
+                base_clip = base_clip.resized(height=TARGET_H)
+            
+            # --- BRANCHING LOGIC ---
+            if is_pro_mode:
+                role = "intro" if i==0 else "body"
+                voice_text, label = analyze_image_with_context(img_path, prop_context, role, selected_language)
                 
-            role = "intro" if i == 0 else "outro" if i == total_files - 1 else "body"
-            voice, label = analyze_image_with_context(tmp_path, prop_context, role, selected_language, agent_mode)
-            
-            clip = create_scene(img_file, voice, label, SELECTED_VOICE, i, selected_language, tts_engine)
-            if clip: scenes.append(clip)
-            bar.progress((i+1)/total_files)
-            
+                tts_file = os.path.join(output_folder, f"tts_{i}.mp3")
+                if "Edge" in tts_engine:
+                    asyncio.run(edge_tts.Communicate(voice_text, SELECTED_VOICE).save(tts_file))
+                else:
+                    gTTS(voice_text, lang='en').save(tts_file) 
+                
+                audio = AudioFileClip(tts_file)
+                duration = audio.duration + 0.5
+                
+                video = apply_professional_effects(base_clip, duration, i)
+                video = video.with_audio(audio)
+                scenes.append(video)
+                
+            else:
+                duration = 2.5 
+                video = apply_viral_effects(base_clip, duration)
+                scenes.append(video)
+                
+            bar.progress((i+1)/total)
+
         if contact_info:
-            end_clip = create_end_card(contact_info)
-            scenes.append(end_clip)
+            scenes.append(create_end_card(contact_info, (TARGET_W, TARGET_H)))
 
-        if scenes:
-            status.write("🎬 Stitching Final Video...")
+        status.write("Stitching...")
+        final_video = concatenate_videoclips(scenes, method="compose")
+        
+        if not is_pro_mode and bg_music_clip:
+            if bg_music_clip.duration < final_video.duration:
+                bg_music_clip = afx.loop(bg_music_clip, duration=final_video.duration)
             
-            # --- FORCE OUTPUT FOLDER ---
-            output_folder = os.path.abspath("output") # Use absolute path
-            if not os.path.exists(output_folder):
-                os.makedirs(output_folder)
-            
-            unique_id = str(uuid.uuid4())[:8]
-            output_filename = os.path.join(output_folder, f"video_{unique_id}.mp4")
-            
-            # Debugging: Print to terminal to be 100% sure
-            print(f"Saving video to: {output_filename}")
+            bg_music_clip = bg_music_clip.with_duration(final_video.duration)
+            final_video = final_video.with_audio(bg_music_clip)
 
-            final = concatenate_videoclips(scenes, method="chain") 
-            final.write_videofile(
-                output_filename, 
-                fps=24, 
-                codec="libx264", 
-                audio_codec="aac",
-                threads=4,      
-                preset='fast'   
-            )
-            st.success(f"✅ Video Ready!")
-            
-            # --- DOWNLOAD BUTTON ---
-            with open(output_filename, "rb") as file:
-                st.download_button(
-                    label="⬇️ Download Video",
-                    data=file,
-                    file_name=f"video_{unique_id}.mp4",
-                    mime="video/mp4"
-                )
-                
-            st.video(output_filename)
+        filename = f"{output_folder}/video_{uuid.uuid4().hex[:8]}.mp4"
+        
+        final_video.write_videofile(filename, fps=24, codec="libx264", audio_codec="aac", threads=4, preset="fast")
+        
+        st.success("Done!")
+        st.video(filename)
+        with open(filename, "rb") as f:
+            st.download_button("Download", f, file_name="video.mp4")
